@@ -264,8 +264,11 @@ authRoutes.post("/login", async (c) => {
   // Clear failed login attempts on success
   await clearFailedLogins(email);
 
-  // Check 2FA
-  if (user.totpEnabled) {
+  // Check 2FA via TwoFactorAuth table (schema source of truth)
+  const twoFactor = await prisma.twoFactorAuth.findUnique({
+    where: { userId: user.id },
+  });
+  if (twoFactor) {
     // Generate short-lived temp token for 2FA step
     const tempToken = generateAccessToken({
       id: user.id,
@@ -323,10 +326,10 @@ authRoutes.post("/refresh", async (c) => {
   const { refreshToken } = parsed.data;
   const tokenHash = hashRefreshToken(refreshToken);
 
-  // Find session by token hash
+  // Find session by token hash (stored in refreshToken column)
   const session = await prisma.session.findFirst({
     where: {
-      tokenHash,
+      refreshToken: tokenHash,
       revokedAt: null,
       expiresAt: { gt: new Date() },
     },
@@ -362,7 +365,7 @@ authRoutes.post("/refresh", async (c) => {
     newRefreshToken,
     ip,
     userAgent,
-    session.deviceFingerprint
+    undefined
   );
 
   // Generate new access token
@@ -382,7 +385,7 @@ authRoutes.post("/logout", async (c) => {
   if (refreshToken) {
     const tokenHash = hashRefreshToken(refreshToken);
     await prisma.session.updateMany({
-      where: { tokenHash },
+      where: { refreshToken: tokenHash },
       data: { revokedAt: new Date() },
     });
   }
@@ -485,7 +488,6 @@ authRoutes.get("/me", authMiddleware, async (c) => {
       phone: true,
       status: true,
       kycTier: true,
-      totpEnabled: true,
       createdAt: true,
     },
   });
@@ -494,7 +496,12 @@ authRoutes.get("/me", authMiddleware, async (c) => {
     return c.json({ error: "User not found" }, 404);
   }
 
-  return c.json({ user: dbUser });
+  const twoFactor = await prisma.twoFactorAuth.findUnique({
+    where: { userId: user.sub },
+    select: { id: true },
+  });
+
+  return c.json({ user: { ...dbUser, totpEnabled: !!twoFactor } });
 });
 
 // ── PATCH /auth/me ─────────────────────────────────────────
@@ -574,12 +581,17 @@ authRoutes.post("/2fa/verify", authMiddleware, async (c) => {
       return c.json({ error: "Invalid 2FA code" }, 400);
     }
 
-    // Enable 2FA
-    await prisma.user.update({
-      where: { id: user.sub },
-      data: {
-        totpEnabled: true,
-        totpSecret: storedSecret, // TODO: encrypt with AES-256-GCM in production
+    // Enable 2FA — store in TwoFactorAuth table (schema source of truth)
+    await prisma.twoFactorAuth.upsert({
+      where: { userId: user.sub },
+      update: {
+        secret: storedSecret, // TODO: encrypt with AES-256-GCM in production
+        backupCodes: [],
+      },
+      create: {
+        userId: user.sub,
+        secret: storedSecret, // TODO: encrypt with AES-256-GCM in production
+        backupCodes: [],
       },
     });
 
@@ -593,14 +605,16 @@ authRoutes.post("/2fa/verify", authMiddleware, async (c) => {
   }
 
   // Login 2FA verification (tempToken flow)
-  const dbUser = await prisma.user.findUnique({ where: { id: user.sub } });
-  if (!dbUser?.totpEnabled || !dbUser.totpSecret) {
+  const tfa = await prisma.twoFactorAuth.findUnique({
+    where: { userId: user.sub },
+  });
+  if (!tfa?.secret) {
     return c.json({ error: "2FA is not set up" }, 400);
   }
 
   const isValid = authenticator.verify({
     token: parsed.data.code,
-    secret: dbUser.totpSecret,
+    secret: tfa.secret,
   });
 
   if (!isValid) {
@@ -614,12 +628,8 @@ authRoutes.post("/2fa/verify", authMiddleware, async (c) => {
 authRoutes.post("/2fa/disable", authMiddleware, async (c) => {
   const user = c.get("user") as JWTPayload;
 
-  await prisma.user.update({
-    where: { id: user.sub },
-    data: {
-      totpEnabled: false,
-      totpSecret: null,
-    },
+  await prisma.twoFactorAuth.deleteMany({
+    where: { userId: user.sub },
   });
 
   return c.json({ message: "2FA disabled successfully" });
@@ -634,8 +644,9 @@ authRoutes.get("/devices", authMiddleware, async (c) => {
     orderBy: { lastSeenAt: "desc" },
     select: {
       id: true,
-      deviceFingerprint: true,
-      userAgent: true,
+      fingerprint: true,
+      label: true,
+      trusted: true,
       lastSeenAt: true,
       createdAt: true,
     },
@@ -658,20 +669,10 @@ authRoutes.delete("/devices/:id", authMiddleware, async (c) => {
     return c.json({ error: "Device not found" }, 404);
   }
 
-  // Delete device and revoke associated sessions
-  await prisma.$transaction(async (tx) => {
-    await tx.device.delete({ where: { id: deviceId } });
+  // Delete device (sessions are tracked separately — revoke via DELETE /sessions)
+  await prisma.device.delete({ where: { id: deviceId } });
 
-    await tx.session.updateMany({
-      where: {
-        userId: user.sub,
-        deviceFingerprint: device.deviceFingerprint,
-      },
-      data: { revokedAt: new Date() },
-    });
-  });
-
-  return c.json({ message: "Device removed and sessions revoked" });
+  return c.json({ message: "Device removed" });
 });
 
 // ── DELETE /auth/sessions ──────────────────────────────────

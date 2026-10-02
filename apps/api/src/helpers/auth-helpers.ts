@@ -102,17 +102,16 @@ export async function createSession(
   refreshToken: string,
   ip: string | undefined,
   userAgent: string | undefined,
-  deviceFingerprint: string | undefined
+  _deviceFingerprint?: string | undefined
 ) {
   const tokenHash = hashRefreshToken(refreshToken);
 
   const session = await prisma.session.create({
     data: {
       userId,
-      tokenHash,
-      ip: ip || "unknown",
+      refreshToken: tokenHash,
+      ipAddress: ip || "unknown",
       userAgent: userAgent || "unknown",
-      deviceFingerprint: deviceFingerprint || "unknown",
       expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30 days
     },
   });
@@ -224,15 +223,16 @@ export async function verifyPasswordResetToken(
 
 export async function recordDeviceLogin(
   userId: string,
-  ip: string | undefined,
+  _ip: string | undefined,
   userAgent: string | undefined,
   deviceFingerprint: string | undefined
 ) {
+  const fingerprint = deviceFingerprint || "unknown";
   // Check if device is known
   const existingDevice = await prisma.device.findFirst({
     where: {
       userId,
-      deviceFingerprint: deviceFingerprint || "unknown",
+      fingerprint,
     },
   });
 
@@ -242,8 +242,8 @@ export async function recordDeviceLogin(
     await prisma.device.create({
       data: {
         userId,
-        deviceFingerprint,
-        userAgent: userAgent || "unknown",
+        fingerprint: deviceFingerprint,
+        label: userAgent || "unknown",
         lastSeenAt: new Date(),
       },
     });
