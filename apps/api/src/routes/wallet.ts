@@ -5,6 +5,7 @@ import { env } from "@numserve/config";
 import { authMiddleware, JWTPayload } from "../middleware/auth";
 import { debitWallet, creditWallet } from "../helpers/wallet-helpers";
 import { initPaystackTransaction, MIN_PAYSTACK_NGN } from "../helpers/payments-paystack";
+import { initStripePayment, MIN_STRIPE_USD } from "../helpers/payments-stripe";
 
 export const walletRoutes = new Hono<{ Variables: { user: JWTPayload } }>();
 
@@ -111,6 +112,44 @@ walletRoutes.post("/fund/paystack", authMiddleware, async (c) => {
     orderId: order.id,
     authorizationUrl: init.authorizationUrl,
     reference: init.reference,
+  });
+});
+
+// ── POST /wallet/fund/stripe ──
+const fundStripeSchema = z.object({
+  amount: z.number().min(MIN_STRIPE_USD),
+});
+
+walletRoutes.post("/fund/stripe", authMiddleware, async (c) => {
+  const user = c.get("user") as JWTPayload;
+  const body = await c.req.json();
+  const parsed = fundStripeSchema.safeParse(body);
+  if (!parsed.success) return c.json({ error: parsed.error.errors[0].message }, 400);
+
+  const wallet = await prisma.wallet.findUnique({ where: { userId: user.sub } });
+  if (!wallet) return c.json({ error: "Wallet not found" }, 404);
+
+  const order = await prisma.fundingOrder.create({
+    data: {
+      walletId: wallet.id,
+      provider: "STRIPE",
+      amountFiat: parsed.data.amount,
+      currency: "USD",
+      status: "PENDING",
+    },
+  });
+
+  const init = await initStripePayment(user.sub, order.id, parsed.data.amount);
+
+  await prisma.fundingOrder.update({
+    where: { id: order.id },
+    data: { providerRef: init.paymentIntentId },
+  });
+
+  return c.json({
+    orderId: order.id,
+    clientSecret: init.clientSecret,
+    paymentIntentId: init.paymentIntentId,
   });
 });
 
