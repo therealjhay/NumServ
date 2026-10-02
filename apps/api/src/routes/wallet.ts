@@ -3,7 +3,7 @@ import { z } from "zod";
 import { prisma } from "@numserve/db";
 import { env } from "@numserve/config";
 import { authMiddleware, JWTPayload } from "../middleware/auth";
-import { debitWallet, creditWallet } from "../helpers/wallet-helpers";
+import { debitWallet, creditWallet, issueRefund } from "../helpers/wallet-helpers";
 import { initPaystackTransaction, MIN_PAYSTACK_NGN } from "../helpers/payments-paystack";
 import { initStripePayment, MIN_STRIPE_USD } from "../helpers/payments-stripe";
 
@@ -151,6 +151,24 @@ walletRoutes.post("/fund/stripe", authMiddleware, async (c) => {
     clientSecret: init.clientSecret,
     paymentIntentId: init.paymentIntentId,
   });
+});
+
+// ── POST /wallet/internal/refund ──
+walletRoutes.post("/internal/refund", async (c) => {
+  if (!checkInternalSecret(c)) return c.json({ error: "Forbidden" }, 403);
+  const body = await c.req.json();
+  const parsed = z.object({ assignmentId: z.string().min(1) }).safeParse(body);
+  if (!parsed.success) return c.json({ error: "assignmentId required" }, 400);
+
+  try {
+    const result = await issueRefund(parsed.data.assignmentId);
+    if (!result) return c.json({ refunded: false });
+    return c.json({ refunded: true });
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : "Refund failed";
+    if (msg === "ASSIGNMENT_NOT_FOUND") return c.json({ error: msg }, 404);
+    throw e;
+  }
 });
 
 // ── POST /wallet/internal/debit ──
