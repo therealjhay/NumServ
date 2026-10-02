@@ -16,7 +16,7 @@ let redis: Redis | null = null;
 
 export function getRedis(): Redis {
   if (!redis) {
-    redis = new Redis(env.REDIS_URL || "redis://localhost:6379");
+    redis = new Redis(env().REDIS_URL || "redis://localhost:6379");
   }
   return redis;
 }
@@ -68,7 +68,7 @@ export function generateAccessToken(user: {
   kycTier: string;
   status: string;
 }): string {
-  const privateKey = env.JWT_PRIVATE_KEY?.replace(/\\n/g, "\n") || "";
+  const privateKey = env().JWT_PRIVATE_KEY?.replace(/\\n/g, "\n") || "";
 
   return jwt.sign(
     {
