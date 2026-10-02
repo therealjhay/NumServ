@@ -54,6 +54,9 @@ const serverEnvSchema = z.object({
   PORT: z.coerce.number().default(3001),
   CORS_ORIGIN: z.string().default("http://localhost:3000"),
   CORS_ORIGINS: z.string().optional(),
+
+  // Internal service-to-service
+  INTERNAL_SERVICE_SECRET: z.string().min(16).optional(),
 });
 
 export type ServerEnv = z.infer<typeof serverEnvSchema>;

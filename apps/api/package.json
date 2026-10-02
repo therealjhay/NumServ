@@ -13,6 +13,7 @@
     "@numserve/db": "workspace:*",
     "@numserve/types": "workspace:*",
     "@numserve/utils": "workspace:*",
+    "@prisma/client": "^5.20.0",
     "bcryptjs": "^2.4.3",
     "hono": "^4.5.0",
     "ioredis": "^5.4.1",

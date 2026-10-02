@@ -5,6 +5,7 @@ import { logger } from "hono/logger";
 import { env } from "@numserve/config";
 import { prisma } from "@numserve/db";
 import { authRoutes } from "./routes/auth";
+import { walletRoutes } from "./routes/wallet";
 
 const app = new Hono();
 
@@ -21,6 +22,7 @@ app.get("/health", (c) => c.json({ status: "ok", timestamp: Date.now() }));
 
 // ── Mount routes ───────────────────────────────────────────
 app.route("/auth", authRoutes);
+app.route("/wallet", walletRoutes);
 
 // ── 404 fallback ───────────────────────────────────────────
 app.notFound((c) => c.json({ error: "Not found" }, 404));
