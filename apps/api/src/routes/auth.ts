@@ -26,7 +26,7 @@ import {
 // 2FA, Devices, Profile
 // ─────────────────────────────────────────────
 
-export const authRoutes = new Hono();
+export const authRoutes = new Hono<{ Variables: { user: JWTPayload } }>();
 
 // ═══════════════════════════════════════════════
 //  Validation Schemas

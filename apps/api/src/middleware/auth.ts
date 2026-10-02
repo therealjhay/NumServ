@@ -21,7 +21,10 @@ export interface JWTPayload {
  * Protected route middleware — verifies the JWT access token.
  * Attaches decoded payload to c.var.user on success.
  */
-export async function authMiddleware(c: Context, next: Next) {
+export async function authMiddleware(
+  c: Context<{ Variables: { user: JWTPayload } }>,
+  next: Next
+) {
   const authHeader = c.req.header("Authorization");
 
   if (!authHeader?.startsWith("Bearer ")) {
