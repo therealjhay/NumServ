@@ -4,6 +4,7 @@ import { prisma } from "@numserve/db";
 import { env } from "@numserve/config";
 import { authMiddleware, JWTPayload } from "../middleware/auth";
 import { debitWallet, creditWallet } from "../helpers/wallet-helpers";
+import { initPaystackTransaction, MIN_PAYSTACK_NGN } from "../helpers/payments-paystack";
 
 export const walletRoutes = new Hono<{ Variables: { user: JWTPayload } }>();
 
@@ -62,6 +63,54 @@ walletRoutes.get("/transactions", authMiddleware, async (c) => {
       createdAt: t.createdAt,
     })),
     pagination: { page, limit, total },
+  });
+});
+
+// ── POST /wallet/fund/paystack ──
+const fundPaystackSchema = z.object({
+  amount: z.number().min(MIN_PAYSTACK_NGN),
+  currency: z.string().default("NGN"),
+  callbackUrl: z.string().url().optional(),
+});
+
+walletRoutes.post("/fund/paystack", authMiddleware, async (c) => {
+  const user = c.get("user") as JWTPayload;
+  const body = await c.req.json();
+  const parsed = fundPaystackSchema.safeParse(body);
+  if (!parsed.success) return c.json({ error: parsed.error.errors[0].message }, 400);
+
+  const wallet = await prisma.wallet.findUnique({ where: { userId: user.sub } });
+  if (!wallet) return c.json({ error: "Wallet not found" }, 404);
+  const dbUser = await prisma.user.findUnique({ where: { id: user.sub } });
+  if (!dbUser) return c.json({ error: "User not found" }, 404);
+
+  const order = await prisma.fundingOrder.create({
+    data: {
+      walletId: wallet.id,
+      provider: "PAYSTACK",
+      amountFiat: parsed.data.amount,
+      currency: parsed.data.currency,
+      status: "PENDING",
+    },
+  });
+
+  const reference = `ps_${order.id.replace(/-/g, "").slice(0, 20)}`;
+  const init = await initPaystackTransaction(
+    dbUser.email,
+    parsed.data.amount,
+    reference,
+    parsed.data.callbackUrl
+  );
+
+  await prisma.fundingOrder.update({
+    where: { id: order.id },
+    data: { providerRef: init.reference },
+  });
+
+  return c.json({
+    orderId: order.id,
+    authorizationUrl: init.authorizationUrl,
+    reference: init.reference,
   });
 });
 
