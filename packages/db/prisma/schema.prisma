@@ -1,0 +1,383 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────────────────────
+// ENUMS
+// ─────────────────────────────────────────────
+
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+  BANNED
+  PENDING_VERIFICATION
+}
+
+enum KYCTier {
+  NONE      // no KYC — lowest limits
+  BASIC     // email verified
+  VERIFIED  // ID submitted + approved
+}
+
+enum WalletTransactionType {
+  CREDIT    // money added
+  DEBIT     // money spent
+  REFUND    // auto refund on failed OTP
+  BONUS     // referral or coupon
+}
+
+enum WalletTransactionStatus {
+  PENDING
+  COMPLETED
+  FAILED
+  REVERSED
+}
+
+enum FundingProvider {
+  PAYSTACK
+  STRIPE
+  CRYPTO
+  ADMIN_CREDIT
+}
+
+enum NumberType {
+  TEMPORARY   // single-use OTP, minutes to hours
+  LONG_TERM   // rented monthly
+}
+
+enum NumberStatus {
+  AVAILABLE
+  IN_USE
+  RECYCLING   // cooling off after use
+  FLAGGED     // blacklisted by a platform
+  RETIRED     // permanently removed from pool
+}
+
+enum AssignmentStatus {
+  ACTIVE          // user has the number, awaiting OTP
+  OTP_RECEIVED    // OTP delivered
+  EXPIRED         // timed out without OTP
+  CANCELLED       // user cancelled
+}
+
+enum ProviderStatus {
+  ACTIVE
+  DEGRADED    // elevated error rates
+  OFFLINE
+}
+
+enum FraudEventType {
+  LOGIN_ANOMALY
+  RAPID_PURCHASE
+  IP_MISMATCH
+  DEVICE_CHANGE
+  MASS_REGISTRATIONS
+  CHARGEBACK
+}
+
+enum FraudAction {
+  FLAG
+  WARN
+  SUSPEND
+  BAN
+}
+
+// ─────────────────────────────────────────────
+// USERS
+// ─────────────────────────────────────────────
+
+model User {
+  id                String      @id @default(uuid())
+  email             String      @unique
+  passwordHash      String
+  fullName          String
+  phone             String?
+  country           String      // ISO 3166-1 alpha-2
+  status            UserStatus  @default(PENDING_VERIFICATION)
+  kycTier           KYCTier     @default(NONE)
+  emailVerifiedAt   DateTime?
+  referralCode      String      @unique @default(cuid())
+  referredBy        String?
+
+  createdAt         DateTime    @default(now())
+  updatedAt         DateTime    @updatedAt
+
+  wallet            Wallet?
+  sessions          Session[]
+  devices           Device[]
+  assignments       NumberAssignment[]
+  fraudEvents       FraudEvent[]
+  kycSubmission     KYCSubmission?
+  apiKeys           ApiKey[]
+
+  @@index([email])
+  @@index([referralCode])
+  @@index([status])
+}
+
+// ─────────────────────────────────────────────
+// AUTH
+// ─────────────────────────────────────────────
+
+model Session {
+  id            String    @id @default(uuid())
+  userId        String
+  refreshToken  String    @unique
+  ipAddress     String
+  userAgent     String
+  expiresAt     DateTime
+  revokedAt     DateTime?
+  createdAt     DateTime  @default(now())
+
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([refreshToken])
+}
+
+model Device {
+  id            String    @id @default(uuid())
+  userId        String
+  fingerprint   String    // browser/device fingerprint hash
+  label         String?   // "Chrome on MacOS"
+  trusted       Boolean   @default(false)
+  lastSeenAt    DateTime  @default(now())
+  createdAt     DateTime  @default(now())
+
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, fingerprint])
+  @@index([userId])
+}
+
+model TwoFactorAuth {
+  id          String    @id @default(uuid())
+  userId      String    @unique
+  secret      String    // TOTP secret (encrypted at rest)
+  backupCodes String[]  // hashed backup codes
+  enabledAt   DateTime  @default(now())
+}
+
+// ─────────────────────────────────────────────
+// WALLET
+// ─────────────────────────────────────────────
+
+model Wallet {
+  id            String    @id @default(uuid())
+  userId        String    @unique
+  balance       Decimal   @default(0) @db.Decimal(12, 6)  // USD; 6dp for crypto compat
+  currency      String    @default("USD")
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  transactions  WalletTransaction[]
+  fundingOrders FundingOrder[]
+
+  @@index([userId])
+}
+
+model WalletTransaction {
+  id              String                    @id @default(uuid())
+  walletId        String
+  type            WalletTransactionType
+  status          WalletTransactionStatus   @default(PENDING)
+  amount          Decimal                   @db.Decimal(12, 6)
+  balanceBefore   Decimal                   @db.Decimal(12, 6)
+  balanceAfter    Decimal                   @db.Decimal(12, 6)
+  description     String
+  referenceId     String?                   // external payment ref or assignmentId
+  idempotencyKey  String                    @unique   // prevent double-debit
+  metadata        Json?
+  createdAt       DateTime                  @default(now())
+
+  wallet          Wallet                    @relation(fields: [walletId], references: [id])
+
+  @@index([walletId])
+  @@index([idempotencyKey])
+  @@index([referenceId])
+  @@index([createdAt])
+}
+
+model FundingOrder {
+  id              String          @id @default(uuid())
+  walletId        String
+  provider        FundingProvider
+  amountFiat      Decimal         @db.Decimal(12, 2)
+  amountCredited  Decimal?        @db.Decimal(12, 6)  // in wallet currency
+  currency        String          // NGN, USD, etc.
+  providerRef     String?         @unique             // Paystack ref, Stripe PI id
+  status          String          @default("PENDING")
+  webhookPayload  Json?
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  wallet          Wallet          @relation(fields: [walletId], references: [id])
+
+  @@index([walletId])
+  @@index([providerRef])
+}
+
+// ─────────────────────────────────────────────
+// PROVIDERS
+// ─────────────────────────────────────────────
+
+model Provider {
+  id              String          @id @default(uuid())
+  name            String          @unique   // "smsactivate", "5sim", "textverified"
+  displayName     String
+  apiBaseUrl      String
+  status          ProviderStatus  @default(ACTIVE)
+  priority        Int             @default(1)  // lower = higher priority
+  successRate     Decimal         @default(100) @db.Decimal(5, 2)
+  avgDeliveryMs   Int?
+  lastHealthCheck DateTime?
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  numbers         VirtualNumber[]
+}
+
+// ─────────────────────────────────────────────
+// NUMBERS
+// ─────────────────────────────────────────────
+
+model Service {
+  id          String    @id @default(uuid())
+  slug        String    @unique   // "telegram", "whatsapp", "gmail"
+  displayName String
+  iconUrl     String?
+  active      Boolean   @default(true)
+
+  prices      NumberPrice[]
+}
+
+model VirtualNumber {
+  id              String        @id @default(uuid())
+  number          String        @unique
+  countryCode     String        // "US", "UK", "NG"
+  providerId      String
+  providerNumberId String       // provider's internal ID for this number
+  type            NumberType    @default(TEMPORARY)
+  status          NumberStatus  @default(AVAILABLE)
+  reputationScore Int           @default(100)  // 0–100; lower = more blacklists
+  useCount        Int           @default(0)
+  lastUsedAt      DateTime?
+  blacklistedOn   String[]      // list of service slugs this number is banned on
+  recycleAfter    DateTime?     // when it can be reassigned
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  provider        Provider      @relation(fields: [providerId], references: [id])
+  assignments     NumberAssignment[]
+
+  @@index([status, countryCode])
+  @@index([reputationScore])
+  @@index([providerId])
+}
+
+model NumberPrice {
+  id          String      @id @default(uuid())
+  serviceId   String
+  countryCode String
+  type        NumberType
+  priceUsd    Decimal     @db.Decimal(8, 4)
+  providerCost Decimal    @db.Decimal(8, 4)  // what we pay; markup = price - cost
+  active      Boolean     @default(true)
+
+  service     Service     @relation(fields: [serviceId], references: [id])
+
+  @@unique([serviceId, countryCode, type])
+  @@index([serviceId])
+}
+
+// ─────────────────────────────────────────────
+// ASSIGNMENTS (Number in use by a user)
+// ─────────────────────────────────────────────
+
+model NumberAssignment {
+  id              String            @id @default(uuid())
+  userId          String
+  numberId        String
+  serviceSlug     String
+  status          AssignmentStatus  @default(ACTIVE)
+  pricePaid       Decimal           @db.Decimal(8, 4)
+  otpCode         String?           // the received OTP (store encrypted)
+  otpReceivedAt   DateTime?
+  expiresAt       DateTime
+  refundedAt      DateTime?
+  createdAt       DateTime          @default(now())
+
+  user            User              @relation(fields: [userId], references: [id])
+  number          VirtualNumber     @relation(fields: [numberId], references: [id])
+
+  @@index([userId])
+  @@index([numberId])
+  @@index([status])
+  @@index([expiresAt])
+}
+
+// ─────────────────────────────────────────────
+// FRAUD
+// ─────────────────────────────────────────────
+
+model FraudEvent {
+  id          String          @id @default(uuid())
+  userId      String
+  eventType   FraudEventType
+  score       Int             // incremental risk score for this event
+  metadata    Json
+  action      FraudAction?    // populated after scorer runs
+  resolvedAt  DateTime?
+  createdAt   DateTime        @default(now())
+
+  user        User            @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@index([eventType])
+  @@index([createdAt])
+}
+
+// ─────────────────────────────────────────────
+// KYC
+// ─────────────────────────────────────────────
+
+model KYCSubmission {
+  id            String    @id @default(uuid())
+  userId        String    @unique
+  providerRef   String?   // Smile Identity job ID
+  status        String    @default("PENDING")  // PENDING | APPROVED | REJECTED
+  documentType  String?   // NIN, BVN, Passport
+  reviewedAt    DateTime?
+  reviewedBy    String?   // Admin user ID
+  notes         String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  user          User      @relation(fields: [userId], references: [id])
+}
+
+// ─────────────────────────────────────────────
+// API KEYS (Developer API — Phase 3)
+// ─────────────────────────────────────────────
+
+model ApiKey {
+  id          String    @id @default(uuid())
+  userId      String
+  keyHash     String    @unique   // store hash, never plaintext
+  prefix      String              // first 8 chars for identification: "ns_live_"
+  label       String?
+  lastUsedAt  DateTime?
+  revokedAt   DateTime?
+  createdAt   DateTime  @default(now())
+
+  user        User      @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@index([keyHash])
+}
