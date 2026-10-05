@@ -31,10 +31,9 @@ const serverEnvSchema = z.object({
   STRIPE_PUBLIC_KEY: z.string().optional(),
   STRIPE_WEBHOOK_SECRET: z.string().optional(),
 
-  // SMS Providers
-  SMSACTIVATE_API_KEY: z.string().optional(),
+  // SMS Providers (real only — no mocks)
   FIVESIM_API_KEY: z.string().optional(),
-  TEXTVERIFIED_API_KEY: z.string().optional(),
+  SMSPVA_API_KEY: z.string().optional(),
 
   // Security
   TURNSTILE_SECRET_KEY: z.string().optional(),
