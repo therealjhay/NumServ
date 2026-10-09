@@ -34,15 +34,9 @@ export async function initPaystackTransaction(
   amountNgn: number,
   reference: string,
   callbackUrl?: string
-): Promise<{ authorizationUrl: string; reference: string; mocked: boolean }> {
+): Promise<{ authorizationUrl: string; reference: string }> {
   const secret = env().PAYSTACK_SECRET_KEY;
-  if (!secret) {
-    return {
-      authorizationUrl: `https://paystack.mock/checkout/${reference}`,
-      reference,
-      mocked: true,
-    };
-  }
+  if (!secret) throw new Error("PAYSTACK_NOT_CONFIGURED");
 
   const res = await fetch("https://api.paystack.co/transaction/initialize", {
     method: "POST",
@@ -67,6 +61,5 @@ export async function initPaystackTransaction(
   return {
     authorizationUrl: data.data.authorization_url,
     reference: data.data.reference,
-    mocked: false,
   };
 }

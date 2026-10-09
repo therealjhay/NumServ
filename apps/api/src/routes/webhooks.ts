@@ -10,15 +10,15 @@ export const webhookRoutes = new Hono();
 
 // ── POST /webhooks/paystack ──
 webhookRoutes.post("/paystack", async (c) => {
+  if (!env().PAYSTACK_SECRET_KEY) {
+    return c.json({ error: "PAYSTACK_NOT_CONFIGURED" }, 503);
+  }
   const rawBody = await c.req.text();
   const signature = c.req.header("x-paystack-signature");
 
-  // In mock mode (no secret configured) skip verification for local testing.
-  if (env().PAYSTACK_SECRET_KEY) {
-    if (!verifyPaystackSignature(rawBody, signature)) {
-      console.error("[WEBHOOK] Invalid Paystack signature");
-      return c.json({ error: "Invalid signature" }, 400);
-    }
+  if (!verifyPaystackSignature(rawBody, signature)) {
+    console.error("[WEBHOOK] Invalid Paystack signature");
+    return c.json({ error: "Invalid signature" }, 400);
   }
 
   let event: { event?: string; data?: { reference?: string; status?: string; amount?: number } };
