@@ -96,12 +96,24 @@ walletRoutes.post("/fund/paystack", authMiddleware, async (c) => {
   });
 
   const reference = `ps_${order.id.replace(/-/g, "").slice(0, 20)}`;
-  const init = await initPaystackTransaction(
-    dbUser.email,
-    parsed.data.amount,
-    reference,
-    parsed.data.callbackUrl
-  );
+  let init;
+  try {
+    init = await initPaystackTransaction(
+      dbUser.email,
+      parsed.data.amount,
+      reference,
+      parsed.data.callbackUrl
+    );
+  } catch (e) {
+    if (e instanceof Error && e.message === "PAYSTACK_NOT_CONFIGURED") {
+      await prisma.fundingOrder.update({
+        where: { id: order.id },
+        data: { status: "FAILED" },
+      });
+      return c.json({ error: "PAYSTACK_NOT_CONFIGURED" }, 503);
+    }
+    throw e;
+  }
 
   await prisma.fundingOrder.update({
     where: { id: order.id },
@@ -139,7 +151,19 @@ walletRoutes.post("/fund/stripe", authMiddleware, async (c) => {
     },
   });
 
-  const init = await initStripePayment(user.sub, order.id, parsed.data.amount);
+  let init;
+  try {
+    init = await initStripePayment(user.sub, order.id, parsed.data.amount);
+  } catch (e) {
+    if (e instanceof Error && e.message === "STRIPE_NOT_CONFIGURED") {
+      await prisma.fundingOrder.update({
+        where: { id: order.id },
+        data: { status: "FAILED" },
+      });
+      return c.json({ error: "STRIPE_NOT_CONFIGURED" }, 503);
+    }
+    throw e;
+  }
 
   await prisma.fundingOrder.update({
     where: { id: order.id },
